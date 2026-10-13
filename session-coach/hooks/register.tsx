@@ -175,26 +175,33 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
-    if (e.agentId !== undefined) return ran
-    const tool = e.tool
-    const command = tool === 'Bash' && typeof (e as { command?: unknown }).command === 'string' ? (e as { command: string }).command : ''
-    const failed = ran.deny === undefined && ran.isError === true
-    await update($, current, c =>
-      c === null
-        ? c
-        : {
-            ...c,
-            tools: c.tools + 1,
-            edits: c.edits + (tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit' ? 1 : 0),
-            bash: c.bash + (tool === 'Bash' ? 1 : 0),
-            tests: c.tests + (tool === 'Bash' && isVerification(command) ? 1 : 0),
-            failures: c.failures + (failed ? 1 : 0),
-            questions: c.questions + (tool === 'AskUserQuestion' ? 1 : 0),
-          },
-    )
+    // Bookkeeping only. The tool has run by now, so nothing below may throw
+    // into the chain: a counting failure is swallowed and the result returned.
+    try {
+      if (e.agentId === undefined) {
+        const tool = e.tool
+        const command = tool === 'Bash' && typeof (e as { command?: unknown }).command === 'string' ? (e as { command: string }).command : ''
+        const failed = ran.deny === undefined && ran.isError === true
+        await update($, current, c =>
+          c === null
+            ? c
+            : {
+                ...c,
+                tools: c.tools + 1,
+                edits: c.edits + (tool === 'Edit' || tool === 'Write' || tool === 'NotebookEdit' ? 1 : 0),
+                bash: c.bash + (tool === 'Bash' ? 1 : 0),
+                tests: c.tests + (tool === 'Bash' && isVerification(command) ? 1 : 0),
+                failures: c.failures + (failed ? 1 : 0),
+                questions: c.questions + (tool === 'AskUserQuestion' ? 1 : 0),
+              },
+        )
+      }
+    } catch {
+      // counted nothing this time
+    }
 
     return ran
-  }).catch(($, e, next) => (next.called ? next(e) : next(e)))
+  }).catch(($, e, next) => next(e)) // replay-safe: after `called`, next(e) is the result already obtained
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
