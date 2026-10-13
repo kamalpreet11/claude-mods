@@ -1,0 +1,13 @@
+{
+  "name": "claude-mods",
+  "description": "Mods for Claude Code by kamalpreet11",
+  "owner": {
+    "name": "kamalpreet11"
+  },
+  "plugins": [
+    {
+      "name": "prompt-coach",
+      "source": "./prompt-coach"
+    }
+  ]
+}
