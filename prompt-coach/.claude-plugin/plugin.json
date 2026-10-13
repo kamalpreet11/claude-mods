@@ -1,6 +1,6 @@
 {
   "name": "prompt-coach",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scores each prompt you send from 1 to 100 on a red-to-green gauge above the prompt, with one tip on what to do better; /prompt-coach opens the history pane.",
   "types": "./types/index.d.ts",
   "author": {

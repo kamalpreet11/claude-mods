@@ -8,6 +8,10 @@
     {
       "name": "prompt-coach",
       "source": "./prompt-coach"
+    },
+    {
+      "name": "session-coach",
+      "source": "./session-coach"
     }
   ]
 }

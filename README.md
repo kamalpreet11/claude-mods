@@ -1,49 +1,61 @@
 # claude-mods
 
 Mods for [Claude Code](https://claude.com/claude-code): small plugins that
-change Claude's own interface or behaviour.
+change Claude's own interface or behaviour. Both run entirely on your
+machine; the only network call is the grader request through your own Claude
+Code session, so on a subscription it draws from your plan's allowance and
+nothing is billed separately.
 
-## prompt-coach
-
-Scores every prompt you send from 1 to 100 and shows it on a red-to-green
-gauge above the prompt box, with one tip on what to do better. A pane keeps
-the history, the rubric breakdown and the fuller notes.
-
-
-### Install
+## Install
 
 At the prompt of a Claude Code terminal session:
 
 ```
 /plugin install prompt-coach --marketplace kamalpreet11/claude-mods
+/plugin install session-coach --marketplace kamalpreet11/claude-mods
 ```
 
-Answer `y` to add the marketplace, then pick the **user** scope so it loads
-in every project on your machine.
+Answer `y` to add the marketplace the first time, then pick the **user**
+scope so they load in every project.
 
-### What it does
+## prompt-coach
 
-- Every prompt of six or more words is graded in the background by one
-  Haiku call at low effort. Slash commands and short follow-ups ("yes",
-  "commit this") are skipped. Your prompt is never delayed.
-- The grade is five parts of 20: clarity, context given, success criteria,
-  scope bounds, constraints or examples. The sum is the score.
-- **Band above the prompt:** a 20-cell gauge coloured red through amber to
-  green, the score, and the one-line tip. A Hide button dismisses it.
-- **Pane:** `/prompt-coach` opens the latest score with the rubric as mini
-  gauges, the "Do better" notes, your running average, and the last 30
-  prompts.
+Scores every prompt you send from 1 to 100 and shows it on a red-to-green
+gauge above the prompt box, with one tip. `/prompt-coach` opens a pane with
+the rubric, a rewrite of your prompt the way you should have sent it, and a
+clickable history.
 
-The grader call runs through your own Claude Code session, so on a
-subscription it draws from your plan's usage allowance; there is no
-separate charge.
+- Prompts of six or more words are graded in the background by one Sonnet
+  call at low effort. Slash commands and short follow-ups are skipped and the
+  prompt is never delayed.
+- The grader reads your last three prompts and a slice of Claude's last reply
+  first, so a follow-up that is clear in context is graded in context.
+- Each prompt is graded as a task, a question or a decision by that kind's
+  own standard. Five parts of 20: clarity, context, success criteria, scope,
+  constraints.
+- History survives a crash or `--resume`: it is saved per session in the
+  plugin's own store under `~/.claude`, last 30 sessions kept.
 
-### Develop
+## session-coach
+
+Reviews how you ran the whole session, not one prompt. It logs every turn
+(your prompt, duration, tool calls, edits, shell runs, test or build runs,
+failures, questions asked, aborts) and has Sonnet judge the developer on
+goal, steering, verification, scope and efficiency.
+
+- `/session-coach` or the pane's "Review now" runs a review; it also runs by
+  itself every 10 turns.
+- The pane shows the gauge and score, a summary, what is going well, what to
+  do differently, the wasted turn numbers, the one habit to change next
+  session, and the recent turns tagged talk, edit, check or abort.
+- The log and the last review persist per session like prompt-coach's.
+
+## Develop
 
 ```
-claude plugin validate prompt-coach
-claude plugin test prompt-coach
-claude --plugin-dir prompt-coach
+claude plugin validate <mod>
+claude plugin test <mod>
+claude --plugin-dir <mod>
 ```
 
 ## License

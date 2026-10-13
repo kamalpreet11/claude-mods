@@ -1,11 +1,12 @@
 import { test, expect, mock } from 'claude-code/testing'
 
-import { colorFor, isGradable, parseGrade } from '../hooks/register'
+import { colorFor, gradingPrompt, isGradable, parseGrade, staleKeys } from '../hooks/register'
 
 const GRADE = JSON.stringify({
   clarity: 15, context: 10, criteria: 12, scope: 14, constraints: 11,
   tip: 'Say how to verify the result.',
   better: ['Name the files in scope', 'State what done looks like'],
+  rewrite: 'Add a unit test for parseGrade covering fenced JSON, then run the plugin tests.',
 })
 
 test('skips slash commands and bare follow-ups', async () => {
@@ -19,7 +20,15 @@ test('parses the grader JSON and sums the rubric', async () => {
   expect(parsed?.score).toBe(62)
   expect(parsed?.tip).toBe('Say how to verify the result.')
   expect(parsed?.better.length).toBe(2)
+  expect(parsed?.rewrite.startsWith('Add a unit test')).toBe(true)
   expect(parseGrade('no json here')).toBe(null)
+})
+
+test('the grader reads the conversation before the new prompt', async () => {
+  const text = gradingPrompt({ prompts: ['build a mod', 'make it permanent'], answer: 'Published.' }, 'now add a pane')
+  expect(text.indexOf('1. build a mod') < text.indexOf('2. make it permanent')).toBe(true)
+  expect(text.indexOf('Published.') < text.indexOf('NEW PROMPT')).toBe(true)
+  expect(text.endsWith('now add a pane')).toBe(true)
 })
 
 test('runs red to green', async () => {
@@ -49,6 +58,9 @@ test('a graded prompt draws the gauge, the score and the tip above the prompt', 
     const drawn = await $.ui.mount({ plugin: 'prompt-coach', surface, component: 'AbovePrompt', props: BAND })
     expect(await drawn.find({ text: /62/ })).toBeTruthy()
     expect(await drawn.find({ text: /verify/ })).toBeTruthy()
+    const pane = await $.ui.mount({ plugin: 'prompt-coach', surface, component: 'Pane', props: { bodyColumns: 100 } as never, requestId: 'prompt-coach' })
+    expect(await pane.find({ text: /Add a unit test/ })).toBeTruthy()
+    expect(await pane.find({ text: /Try instead/ })).toBeTruthy()
   }
 })
 
@@ -63,4 +75,10 @@ test('a short prompt is not graded', async ($, on) => {
 
   await $.prompt.submit({ text: 'commit this', wait: false })
   expect(calls).toBe(0)
+})
+
+test('keeps only the newest sessions in the store', async () => {
+  const keys = ['session:a', 'other', 'session:b', 'session:c']
+  expect(staleKeys(keys, 2)).toEqual(['session:a'])
+  expect(staleKeys(keys, 5)).toEqual([])
 })

@@ -1,0 +1,11 @@
+{
+  "name": "session-coach",
+  "version": "0.1.0",
+  "description": "Reviews how you ran the whole session, not one prompt: a 1 to 100 score on a red-to-green gauge, what went well, what to do differently, and the turns that were wasted. /session-coach any time; refreshes itself every 10 turns.",
+  "author": {
+    "name": "kamalpreet11"
+  },
+  "types": "./types/index.d.ts",
+  "repository": "https://github.com/kamalpreet11/claude-mods",
+  "license": "MIT"
+}

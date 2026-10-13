@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Hook, Color } from 'claude-code'
 
-import type { Rubric, Score } from '../types'
+import type { Recent, Rubric, Score } from '../types'
 
 const PANE = 'prompt-coach'
 const KEEP = 30
@@ -9,20 +9,45 @@ const MIN_WORDS = 6
 const GAUGE_CELLS = 20
 
 const scores = atom({ plugin: 'prompt-coach', key: 'scores' } as const, [])
+const selected = atom({ plugin: 'prompt-coach', key: 'selected' } as const, null)
+const recent = atom({ plugin: 'prompt-coach', key: 'recent' } as const, { prompts: [], answer: '' })
 const isHidden = atom({ plugin: 'prompt-coach', key: 'isHidden' } as const, false)
 const isPending = atom({ plugin: 'prompt-coach', key: 'isPending' } as const, false)
 const lastError = atom({ plugin: 'prompt-coach', key: 'lastError' } as const, null)
+const sessionId = atom({ plugin: 'prompt-coach', key: 'sessionId' } as const, null)
 
-const RULES = `You grade prompts that a software developer sends to an AI coding assistant.
-Score the prompt on five criteria, each 0 to 20:
+const KEEP_SESSIONS = 30
+
+/** The store keys to drop so at most `keep` sessions stay, oldest first. */
+export const staleKeys = (keys: readonly string[], keep: number): string[] => {
+  const mine = keys.filter(k => k.startsWith('session:'))
+  return mine.length <= keep ? [] : mine.slice(0, mine.length - keep)
+}
+
+type Saved = { scores: Score[]; recent: Recent }
+
+/** Writes this session's history to the plugin's own store, so a resumed session gets it back. */
+async function persist($: Parameters<Hook<'prompt.submit'>>[0]) {
+  const id = await read($, sessionId)
+  if (id === null) return
+  const saved: Saved = { scores: await read($, scores), recent: await read($, recent) }
+  await $.store.set(`session:${id}`, saved)
+}
+
+
+const RULES = `You grade prompts that a software developer sends to an AI coding assistant, inside an ongoing conversation.
+You are given the conversation so far (the developer's previous prompts and the assistant's last reply) and then the new prompt. Grade the NEW prompt in that context: anything the assistant already knows from earlier turns counts as given, and a short follow-up that is unambiguous in context scores well. Do not invent a different domain than the conversation shows.
+First decide the prompt's kind: "task" (asks for work: build, fix, change, write, run), "question" (asks to know or understand something), or "decision" (answers a question the assistant asked, or picks an option). Grade each kind by what a good one needs. For a question, criteria means "is it clear what a satisfying answer contains", scope means "is it one question, bounded to one thing", and constraints means "are the things that would change the answer named"; a question that the assistant can answer fully with nothing more scores 16 or more on all three. For a decision, a plain unambiguous answer scores 16 or more everywhere. Only a task is judged on files, platforms, tests and done criteria.
+Score five criteria, each 0 to 20:
 - clarity: is the ask unambiguous, with the task stated up front?
-- context: does it say what is already known, where things are, what was tried?
-- criteria: does it say what "done" looks like, how to verify, or what to return?
-- scope: does it bound the work (which files, which platform, what not to touch)?
-- constraints: does it name rules, examples, style, or decisions already made?
-A short follow-up that is clear in context ("yes, do it", "commit this") can still score well on clarity and scope; do not punish brevity when nothing more was needed.
+- context: does the assistant have what it needs (from this prompt or earlier turns): what is known, where things are, what was tried?
+- criteria: is it clear what "done" looks like, how to verify, or what to return?
+- scope: is the work bounded (which files, which platform, what not to touch)?
+- constraints: are rules, examples, style or decisions already made named where they matter?
+Scoring anchors, apply them literally: 20 = nothing more could reasonably be asked on this criterion for a task of this size; 16-19 = covered, one small thing could be sharper; 11-15 = partly covered; 5-10 = mostly missing; 0-4 = absent. A prompt that names the file or module, the symptom, what is already in use, the platform, the test to add and the command to run is 16 or more on every criterion. Do not withhold points for details the developer could not know yet (the root cause, which fix is right). Do not withhold points for brevity when the ask is already unambiguous. A follow-up that continues work agreed in earlier turns inherits the criteria, scope and constraints already established there; "keep the tests passing" names a success criterion. Leave "better" empty when nothing material is missing.
+Then write "rewrite": the same ask, rewritten as the developer should have sent it, in the developer's voice, keeping their intent and length within reason (one to four sentences). Never pad with things the assistant already knows.
 Answer with JSON only, no prose and no code fence:
-{"clarity":n,"context":n,"criteria":n,"scope":n,"constraints":n,"tip":"one sentence, under 90 characters, the single most useful change","better":["up to three short bullets on what to add or change"]}`
+{"kind":"task|question|decision","clarity":n,"context":n,"criteria":n,"scope":n,"constraints":n,"tip":"one sentence, under 90 characters, the single most useful change","better":["up to three short bullets on what to add or change"],"rewrite":"the improved prompt"}`
 
 /** A prompt worth grading: not a slash command, not a bare "yes". */
 export const isGradable = (text: string): boolean => {
@@ -60,7 +85,9 @@ export const parseGrade = (text: string): Omit<Score, 'at' | 'prompt'> | null =>
   const better = Array.isArray(raw.better)
     ? raw.better.filter((b): b is string => typeof b === 'string').map(b => b.trim()).filter(Boolean).slice(0, 3)
     : []
-  return { score, rubric, tip, better }
+  const rewrite = typeof raw.rewrite === 'string' ? raw.rewrite.trim() : ''
+  const kind = raw.kind === 'question' || raw.kind === 'decision' ? raw.kind : 'task'
+  return { score, rubric, tip, better, rewrite, kind }
 }
 
 /** Red at 1, amber at 50, green at 100, as a hex colour. */
@@ -75,15 +102,23 @@ export const colorFor = (score: number): Color => {
   return `#${hex(r)}${hex(g)}${hex(b)}`
 }
 
+/** The conversation so far, as the grader reads it, then the new prompt. */
+export const gradingPrompt = (ctx: Recent, text: string): string => {
+  const earlier = ctx.prompts.length === 0 ? '(none)' : ctx.prompts.map((p, i) => `${i + 1}. ${p}`).join('\n')
+  const answer = ctx.answer === '' ? '(none)' : ctx.answer
+  return `Developer's previous prompts, oldest first:\n${earlier}\n\nAssistant's last reply (excerpt):\n${answer}\n\nNEW PROMPT to grade:\n${text}`
+}
+
 async function grade($: Parameters<Hook<'prompt.submit'>>[0], text: string, at: number) {
   await update($, isPending, () => true)
+  const ctx = await read($, recent)
   const r = await $.model.complete({
-    model: 'haiku',
+    model: 'sonnet',
     effort: 'low',
-    maxTokens: 400,
+    maxTokens: 700,
     timeoutMs: 25000,
     system: [{ text: RULES, cache: true }],
-    prompt: text,
+    prompt: gradingPrompt(ctx, text),
   })
   await update($, isPending, () => false)
 
@@ -99,10 +134,22 @@ async function grade($: Parameters<Hook<'prompt.submit'>>[0], text: string, at: 
   const entry: Score = { at, prompt: text.replace(/\s+/g, ' ').slice(0, 80), ...parsed }
   await update($, lastError, () => null)
   await update($, scores, list => [...list, entry].slice(-KEEP))
+  await update($, selected, () => null)
+  await persist($)
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    const id = await $.session.id()
+    await update($, sessionId, () => id)
+    const saved = (await $.store.get(`session:${id}`)) as Saved | undefined
+    if (saved !== undefined && Array.isArray(saved.scores)) {
+      await update($, scores, () => saved.scores)
+      await update($, recent, () => saved.recent ?? { prompts: [], answer: '' })
+    } else {
+      await $.store.set(`session:${id}`, { scores: [], recent: { prompts: [], answer: '' } })
+    }
+    for (const stale of staleKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(stale)
     await $.command.register({
       name: 'prompt-coach',
       description: 'Open the prompt coach pane: your last scores, the rubric and what to do better',
@@ -121,10 +168,23 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const text = e.text
+    if (!text.trim().startsWith('/')) {
+      await update($, recent, r => ({ ...r, prompts: [...r.prompts, text.replace(/\s+/g, ' ').slice(0, 300)].slice(-3) }))
+    }
     if (!isGradable(text)) return next(e)
 
     const started = await $.clock.now()
     void grade($, text, started).catch(() => update($, isPending, () => false))
+
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const answer = e.answer.replace(/\s+/g, ' ').slice(0, 600)
+      await update($, recent, r => ({ ...r, answer }))
+      await persist($)
+    }
 
     return next(e)
   })
@@ -162,11 +222,13 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const list = await read($, scores)
-    const latest = list[list.length - 1]
+    const pick = await read($, selected)
+    const shownIndex = pick !== null && pick >= 0 && pick < list.length ? pick : list.length - 1
+    const latest = list[shownIndex]
     const rows = e.viewport?.rows ?? 24
-    const historyRoom = Math.max(1, rows - 12)
+    const historyRoom = Math.max(1, rows - 16)
 
     if (latest === undefined) {
       return (
@@ -182,10 +244,11 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" gap={1}>
-          <Text bold>Latest</Text>
+          <Text bold>{shownIndex === list.length - 1 ? 'Latest' : `Prompt ${String(shownIndex + 1)}`}</Text>
           <Gauge Text={Text} Box={Box} score={latest.score} />
           <Text bold color={colorFor(latest.score)}>{String(latest.score)}</Text>
           <Text dimColor>avg {String(avg)} over {String(list.length)}</Text>
+          <Text dimColor>{latest.kind}</Text>
         </Box>
         <Text dimColor wrap="truncate-end">"{latest.prompt}"</Text>
         <Box flexDirection="column">
@@ -205,18 +268,26 @@ export const register: Register = on => {
             </Text>
           ))}
         </Box>
+        {latest.rewrite !== '' && (
+          <Box flexDirection="column">
+            <Text bold color="success">Try instead</Text>
+            <Text wrap="wrap">{latest.rewrite}</Text>
+          </Box>
+        )}
         <Box flexDirection="column">
           <Text bold>History</Text>
+          <Text dimColor>Pick a row to see its rubric, tip and rewrite.</Text>
           {list
-            .slice(0, -1)
+            .map((one, i) => ({ one, i }))
             .slice(-historyRoom)
             .reverse()
-            .map(one => (
-              <Box flexDirection="row" gap={1}>
-                <Gauge Text={Text} Box={Box} score={one.score} cells={10} />
+            .map(({ one, i }) => (
+              <Button key={`h${String(i)}`} plain onPress={() => update($, selected, () => i)}>
                 <Text color={colorFor(one.score)}>{String(one.score).padStart(3)}</Text>
-                <Text dimColor wrap="truncate-end">{one.prompt}</Text>
-              </Box>
+                {' '}
+                <Text dimColor>{i === shownIndex ? '> ' : '  '}</Text>
+                <Text dimColor={i !== shownIndex} wrap="truncate-end">{one.prompt}</Text>
+              </Button>
             ))}
         </Box>
       </Box>
